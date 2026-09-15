@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.skenscamera.app-mergeDebugResources-47:/values-v24/values-v24.xml",
+            "map": [
+                {
+                    "source": "/data/data/com.termux/files/home/.gradle/caches/transforms-3/5f0f0b86ed7f9297a927e776794b95e3/transformed/appcompat-1.1.0/res/values-v24/values-v24.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,212",
+                        "endColumns": "156,134",
+                        "endOffsets": "207,342"
+                    }
+                }
+            ]
+        }
+    ]
+}
