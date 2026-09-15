@@ -1,6 +1,8 @@
 package com.skenscamera.app.gles
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Matrix as AndroidMatrix
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
@@ -42,6 +44,13 @@ class TextureRender(private val context: Context) {
     private var muLutTextureHandle = 0
     private var muLutSizeHandle = 0
 
+    @Volatile
+    var captureNextFrame = false
+    var onPhotoCapturedListener: ((Bitmap) -> Unit)? = null
+
+    private var viewportWidth = 0
+    private var viewportHeight = 0
+
     private val vertexShaderCode = """
         uniform mat4 uMVPMatrix;
         uniform mat4 uSTMatrix;
@@ -65,7 +74,6 @@ class TextureRender(private val context: Context) {
         void main() {
             vec4 textureColor = texture2D(sTexture, vTextureCoord);
             
-            // Transformasi koordinat warna ke ruang 3D LUT
             vec3 scale = vec3((uLutSize - 1.0) / uLutSize);
             vec3 offset = vec3(1.0 / (2.0 * uLutSize));
             vec3 lutCoord = textureColor.rgb * scale + offset;
@@ -91,7 +99,6 @@ class TextureRender(private val context: Context) {
         muLutTextureHandle = GLES20.glGetUniformLocation(program, "uLutTexture")
         muLutSizeHandle = GLES20.glGetUniformLocation(program, "uLutSize")
 
-        // Inisialisasi Tekstur Kamera
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
         textureId = textures[0]
@@ -99,8 +106,12 @@ class TextureRender(private val context: Context) {
         GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST.toFloat())
         GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR.toFloat())
 
-        // Load 3D LUT dari File Assets sample.cube
         loadLutTexture()
+    }
+
+    fun updateViewport(width: Int, height: Int) {
+        viewportWidth = width
+        viewportHeight = height
     }
 
     private fun loadLutTexture() {
@@ -130,16 +141,14 @@ class TextureRender(private val context: Context) {
 
         GLES20.glUseProgram(program)
 
-        // Bind Tekstur Kamera (Unit 0)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
 
-        // Bind Tekstur 3D LUT (Unit 1)
         if (lutTextureId != -1) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
             GLES20.glUniform1i(muLutTextureHandle, 1)
-            GLES20.glUniform1f(muLutSizeHandle, 2.0f) // Sesuai LUT_3D_SIZE sample.cube
+            GLES20.glUniform1f(muLutSizeHandle, 2.0f)
         }
 
         triangleVertices.position(0)
@@ -155,6 +164,31 @@ class TextureRender(private val context: Context) {
         GLES20.glUniformMatrix4fv(muSTMatrixHandle, 1, false, stMatrix, 0)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+        if (captureNextFrame) {
+            captureNextFrame = false
+            readAndSaveFrame()
+        }
+    }
+
+    private fun readAndSaveFrame() {
+        if (viewportWidth == 0 || viewportHeight == 0) return
+
+        val buf = ByteBuffer.allocateDirect(viewportWidth * viewportHeight * 4)
+        buf.order(ByteOrder.LITTLE_ENDIAN)
+        GLES20.glReadPixels(0, 0, viewportWidth, viewportHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+        buf.rewind()
+
+        val bitmap = Bitmap.createBitmap(viewportWidth, viewportHeight, Bitmap.Config.ARGB_8888)
+        bitmap.copyPixelsFromBuffer(buf)
+
+        // Balik bitmap secara vertikal karena koordinat Y OpenGL terbalik
+        val matrix = AndroidMatrix().apply {
+            postScale(1f, -1f, viewportWidth / 2f, viewportHeight / 2f)
+        }
+        val flippedBitmap = Bitmap.createBitmap(bitmap, 0, 0, viewportWidth, viewportHeight, matrix, true)
+
+        onPhotoCapturedListener?.invoke(flippedBitmap)
     }
 
     private fun loadShader(shaderType: Int, source: String): Int {

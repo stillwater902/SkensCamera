@@ -8,8 +8,15 @@
         android:minSdkVersion="29"
         android:targetSdkVersion="34" />
 
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <permission
         android:name="com.skenscamera.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
@@ -24,16 +31,19 @@
         android:extractNativeLibs="false"
         android:label="SkensCamera"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar" >
+        android:theme="@android:style/Theme.Material.NoActionBar" >
         <activity
             android:name="com.skenscamera.app.MainActivity"
-            android:exported="true" >
+            android:configChanges="orientation|screenSize"
+            android:exported="true"
+            android:screenOrientation="portrait" >
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
         <!--
         Service for holding metadata. Cannot be instantiated.
         Metadata will be merged from other manifests.
