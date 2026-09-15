@@ -1,14 +1,16 @@
 package com.skenscamera.app.gles
 
+import android.content.Context
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.opengl.GLES30
 import android.opengl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
-class TextureRender {
+class TextureRender(private val context: Context) {
 
     private val triangleVerticesData = floatArrayOf(
         // X, Y, Z, U, V
@@ -31,10 +33,14 @@ class TextureRender {
     var textureId = -1
         private set
 
+    private var lutTextureId = -1
+
     private var maPositionHandle = 0
     private var maTextureHandle = 0
     private var muMVPMatrixHandle = 0
     private var muSTMatrixHandle = 0
+    private var muLutTextureHandle = 0
+    private var muLutSizeHandle = 0
 
     private val vertexShaderCode = """
         uniform mat4 uMVPMatrix;
@@ -53,8 +59,19 @@ class TextureRender {
         precision mediump float;
         varying vec2 vTextureCoord;
         uniform samplerExternalOES sTexture;
+        uniform sampler3D uLutTexture;
+        uniform float uLutSize;
+        
         void main() {
-            gl_FragColor = texture2D(sTexture, vTextureCoord);
+            vec4 textureColor = texture2D(sTexture, vTextureCoord);
+            
+            // Transformasi koordinat warna ke ruang 3D LUT
+            vec3 scale = vec3((uLutSize - 1.0) / uLutSize);
+            vec3 offset = vec3(1.0 / (2.0 * uLutSize));
+            vec3 lutCoord = textureColor.rgb * scale + offset;
+            
+            vec4 newColor = texture3D(uLutTexture, lutCoord);
+            gl_FragColor = vec4(newColor.rgb, textureColor.a);
         }
     """.trimIndent()
 
@@ -71,23 +88,59 @@ class TextureRender {
         maTextureHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
         muMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
         muSTMatrixHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        muLutTextureHandle = GLES20.glGetUniformLocation(program, "uLutTexture")
+        muLutSizeHandle = GLES20.glGetUniformLocation(program, "uLutSize")
 
+        // Inisialisasi Tekstur Kamera
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
         textureId = textures[0]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST.toFloat())
         GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR.toFloat())
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+        // Load 3D LUT dari File Assets sample.cube
+        loadLutTexture()
+    }
+
+    private fun loadLutTexture() {
+        val lutData = CubeParser.parseCubeFile(context, "luts/sample.cube") ?: return
+        val lutTextures = IntArray(1)
+        GLES30.glGenTextures(1, lutTextures, 0)
+        lutTextureId = lutTextures[0]
+
+        val buffer = FloatBuffer.wrap(lutData.data)
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glTexImage3D(
+            GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB16F,
+            lutData.size, lutData.size, lutData.size, 0,
+            GLES30.GL_RGB, GLES30.GL_FLOAT, buffer
+        )
     }
 
     fun drawFrame(st: SurfaceTexture) {
         st.getTransformMatrix(stMatrix)
 
         GLES20.glUseProgram(program)
+
+        // Bind Tekstur Kamera (Unit 0)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+
+        // Bind Tekstur 3D LUT (Unit 1)
+        if (lutTextureId != -1) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
+            GLES20.glUniform1i(muLutTextureHandle, 1)
+            GLES20.glUniform1f(muLutSizeHandle, 2.0f) // Sesuai LUT_3D_SIZE sample.cube
+        }
 
         triangleVertices.position(0)
         GLES20.glVertexAttribPointer(maPositionHandle, 3, GLES20.GL_FLOAT, false, 20, triangleVertices)

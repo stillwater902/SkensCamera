@@ -4,9 +4,12 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
+import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.view.Surface
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,7 +19,6 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -34,8 +36,11 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.skenscamera.app.gles.TextureRender
 import java.text.SimpleDateFormat
 import java.util.Locale
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
 
 class MainActivity : ComponentActivity() {
 
@@ -60,53 +65,81 @@ class MainActivity : ComponentActivity() {
 
     private fun setupCameraUI() {
         setContent {
-            CameraScreen()
+            OpenGLCameraScreen()
         }
     }
 }
 
 @Composable
-fun CameraScreen() {
+fun OpenGLCameraScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     
     var lensFacing by remember { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
     val imageCapture = remember { ImageCapture.Builder().build() }
-    val previewView = remember { PreviewView(context) }
-
-    LaunchedEffect(lensFacing) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-            val cameraSelector = CameraSelector.Builder()
-                .requireLensFacing(lensFacing)
-                .build()
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    preview,
-                    imageCapture
-                )
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }, ContextCompat.getMainExecutor(context))
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Live Preview Kamera
         AndroidView(
-            factory = { previewView },
+            factory = { ctx ->
+                GLSurfaceView(ctx).apply {
+                    setEGLContextClientVersion(3) // Versi OpenGL ES 3.0 untuk 3D LUT
+                    setRenderer(object : GLSurfaceView.Renderer {
+                        private val textureRender = TextureRender(ctx)
+                        private var surfaceTexture: SurfaceTexture? = null
+
+                        override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+                            textureRender.surfaceCreated()
+                            surfaceTexture = SurfaceTexture(textureRender.textureId)
+
+                            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                            cameraProviderFuture.addListener({
+                                val cameraProvider = cameraProviderFuture.get()
+                                val preview = Preview.Builder().build().also {
+                                    it.setSurfaceProvider { request ->
+                                        val surface = Surface(surfaceTexture)
+                                        request.provideSurface(surface, ContextCompat.getMainExecutor(ctx)) {
+                                            surface.release()
+                                        }
+                                    }
+                                }
+
+                                val cameraSelector = CameraSelector.Builder()
+                                    .requireLensFacing(lensFacing)
+                                    .build()
+
+                                try {
+                                    cameraProvider.unbindAll()
+                                    cameraProvider.bindToLifecycle(
+                                        lifecycleOwner,
+                                        cameraSelector,
+                                        preview,
+                                        imageCapture
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }, ContextCompat.getMainExecutor(ctx))
+
+                            surfaceTexture?.setOnFrameAvailableListener {
+                                requestRender()
+                            }
+                        }
+
+                        override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+                            android.opengl.GLES20.glViewport(0, 0, width, height)
+                        }
+
+                        override fun onDrawFrame(gl: GL10?) {
+                            surfaceTexture?.updateTexImage()
+                            surfaceTexture?.let { textureRender.drawFrame(it) }
+                        }
+                    })
+                    renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+                }
+            },
             modifier = Modifier.fillMaxSize()
         )
 
-        // Overlay Kontrol Kamera (Bagian Bawah)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -115,10 +148,8 @@ fun CameraScreen() {
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Spacer Penyeimbang
             Spacer(modifier = Modifier.size(48.dp))
 
-            // Tombol Jepret Foto (Shutter Button)
             IconButton(
                 onClick = { takePhoto(context, imageCapture) },
                 modifier = Modifier
@@ -127,7 +158,6 @@ fun CameraScreen() {
                     .border(4.dp, Color.Gray, CircleShape)
             ) {}
 
-            // Tombol Switch Kamera (Depan / Belakang)
             IconButton(
                 onClick = {
                     lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
